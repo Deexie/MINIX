@@ -1,0 +1,202 @@
+diff -rupNEZbB OriginalSources/usr/include/minix/callnr.h Sources/usr/include/minix/callnr.h
+--- OriginalSources/usr/include/minix/callnr.h	2014-09-14 11:00:44.000000000 +0200
++++ Sources/usr/include/minix/callnr.h	2021-04-28 18:36:06.691824176 +0200
+@@ -58,8 +58,9 @@
+ #define PM_GETEPINFO		(PM_BASE + 45)
+ #define PM_GETPROCNR		(PM_BASE + 46)
+ #define PM_GETSYSINFO		(PM_BASE + 47)
++#define PM_NEGATEEXIT       (PM_BASE + 48)
+ 
+-#define NR_PM_CALLS		48	/* highest number from base plus one */
++#define NR_PM_CALLS		49	/* highest number from base plus one */
+ 
+ /*===========================================================================*
+  *				Calls to VFS				     *
+diff -rupNEZbB OriginalSources/usr/include/minix/ipc.h Sources/usr/include/minix/ipc.h
+--- OriginalSources/usr/include/minix/ipc.h	2014-09-14 11:00:44.000000000 +0200
++++ Sources/usr/include/minix/ipc.h	2021-04-29 11:27:40.373012975 +0200
+@@ -14,6 +14,13 @@
+ #define M_PATH_STRING_MAX  40
+ 
+ typedef struct {
++    int negate;
++
++    uint8_t padding[52];
++} mess_negate;
++_ASSERT_MSG_SIZE(mess_negate);
++
++typedef struct {
+ 	uint8_t data[56];
+ } mess_u8;
+ _ASSERT_MSG_SIZE(mess_u8);
+@@ -2027,6 +2034,8 @@ typedef struct {
+ 	endpoint_t m_source;		/* who sent the message */
+ 	int m_type;			/* what kind of message is it */
+ 	union {
++        mess_negate     m_negate;
++
+ 		mess_u8			m_u8;
+ 		mess_u16		m_u16;
+ 		mess_u32		m_u32;
+diff -rupNEZbB OriginalSources/usr/include/unistd.h Sources/usr/include/unistd.h
+--- OriginalSources/usr/include/unistd.h	2014-09-14 11:00:42.000000000 +0200
++++ Sources/usr/include/unistd.h	2021-04-28 18:48:16.526174702 +0200
+@@ -125,6 +125,7 @@ pid_t	 getppid(void);
+ uid_t	 getuid(void);
+ int	 isatty(int);
+ int	 link(const char *, const char *);
++int negateexit(int);
+ long	 pathconf(const char *, int);
+ int	 pause(void);
+ int	 pipe(int *);
+diff -rupNEZbB OriginalSources/usr/src/include/unistd.h Sources/usr/src/include/unistd.h
+--- OriginalSources/usr/src/include/unistd.h	2014-09-13 23:56:50.000000000 +0200
++++ Sources/usr/src/include/unistd.h	2021-04-28 18:53:16.365701769 +0200
+@@ -125,6 +125,7 @@ pid_t	 getppid(void);
+ uid_t	 getuid(void);
+ int	 isatty(int);
+ int	 link(const char *, const char *);
++int negateexit(int);
+ long	 pathconf(const char *, int);
+ int	 pause(void);
+ int	 pipe(int *);
+diff -rupNEZbB OriginalSources/usr/src/lib/libc/misc/Makefile.inc Sources/usr/src/lib/libc/misc/Makefile.inc
+--- OriginalSources/usr/src/lib/libc/misc/Makefile.inc	2014-09-13 23:56:50.000000000 +0200
++++ Sources/usr/src/lib/libc/misc/Makefile.inc	2021-04-28 20:10:30.531947534 +0200
+@@ -8,3 +8,5 @@ SRCS+=	initfini.c
+ 
+ # for -fstack-protector
+ SRCS+=	stack_protector.c
++
++SRCS+= negateexit.c
+diff -rupNEZbB OriginalSources/usr/src/lib/libc/misc/negateexit.c Sources/usr/src/lib/libc/misc/negateexit.c
+--- OriginalSources/usr/src/lib/libc/misc/negateexit.c	1970-01-01 01:00:00.000000000 +0100
++++ Sources/usr/src/lib/libc/misc/negateexit.c	2021-04-29 12:43:21.689270252 +0200
+@@ -0,0 +1,17 @@
++#include <unistd.h>
++#include <lib.h>
++
++int negateexit(int negate) {
++    message m;
++    m.m_negate.negate = negate;
++    endpoint_t pm_ep;
++
++    if (minix_rs_lookup("pm", &pm_ep) == -1) {
++        errno = ENOSYS;
++        return -1;
++    }
++
++    _syscall(pm_ep, PM_NEGATEEXIT, &m);
++    return m.m_negate.negate;
++}
++
+diff -rupNEZbB OriginalSources/usr/src/minix/include/minix/callnr.h Sources/usr/src/minix/include/minix/callnr.h
+--- OriginalSources/usr/src/minix/include/minix/callnr.h	2014-09-13 23:56:50.000000000 +0200
++++ Sources/usr/src/minix/include/minix/callnr.h	2021-04-28 18:51:00.186283614 +0200
+@@ -58,8 +58,9 @@
+ #define PM_GETEPINFO		(PM_BASE + 45)
+ #define PM_GETPROCNR		(PM_BASE + 46)
+ #define PM_GETSYSINFO		(PM_BASE + 47)
++#define PM_NEGATEEXIT       (PM_BASE + 48)
+ 
+-#define NR_PM_CALLS		48	/* highest number from base plus one */
++#define NR_PM_CALLS		49	/* highest number from base plus one */
+ 
+ /*===========================================================================*
+  *				Calls to VFS				     *
+diff -rupNEZbB OriginalSources/usr/src/minix/servers/pm/forkexit.c Sources/usr/src/minix/servers/pm/forkexit.c
+--- OriginalSources/usr/src/minix/servers/pm/forkexit.c	2014-09-13 23:56:50.000000000 +0200
++++ Sources/usr/src/minix/servers/pm/forkexit.c	2021-04-28 19:56:51.721517920 +0200
+@@ -241,8 +241,16 @@ int do_exit()
+       sys_kill(mp->mp_endpoint, SIGKILL);
+   }
+   else {
++      if (mp->negate == 0) {
+       exit_proc(mp, m_in.m_lc_pm_exit.status, FALSE /*dump_core*/);
+   }
++      else {
++          if (m_in.m_lc_pm_exit.status == 0)
++              exit_proc(mp, 1, FALSE /*dump_core*/);
++          else
++              exit_proc(mp, 0, FALSE /*dump_core*/);
++      }
++  }
+   return(SUSPEND);		/* can't communicate from beyond the grave */
+ }
+ 
+diff -rupNEZbB OriginalSources/usr/src/minix/servers/pm/main.c Sources/usr/src/minix/servers/pm/main.c
+--- OriginalSources/usr/src/minix/servers/pm/main.c	2014-09-13 23:56:50.000000000 +0200
++++ Sources/usr/src/minix/servers/pm/main.c	2021-04-28 19:17:52.786233724 +0200
+@@ -192,6 +192,7 @@ static int sef_cb_init_fresh(int UNUSED(
+   			rmp->mp_parent = INIT_PROC_NR;
+   			rmp->mp_procgrp = rmp->mp_pid = INIT_PID;
+ 			rmp->mp_flags |= IN_USE; 
++			rmp->negate = 0;
+ 
+ 			/* Set scheduling info */
+ 			rmp->mp_scheduler = KERNEL;
+diff -rupNEZbB OriginalSources/usr/src/minix/servers/pm/Makefile Sources/usr/src/minix/servers/pm/Makefile
+--- OriginalSources/usr/src/minix/servers/pm/Makefile	2014-09-13 23:56:50.000000000 +0200
++++ Sources/usr/src/minix/servers/pm/Makefile	2021-04-28 19:57:48.570802557 +0200
+@@ -4,7 +4,7 @@
+ PROG=	pm
+ SRCS=	main.c forkexit.c exec.c time.c alarm.c \
+ 	signal.c utility.c table.c trace.c getset.c misc.c \
+-	profile.c mcontext.c schedule.c
++	profile.c mcontext.c schedule.c negateexit.c
+ 
+ DPADD+=	${LIBSYS} ${LIBTIMERS}
+ LDADD+=	-lsys -ltimers
+diff -rupNEZbB OriginalSources/usr/src/minix/servers/pm/mproc.h Sources/usr/src/minix/servers/pm/mproc.h
+--- OriginalSources/usr/src/minix/servers/pm/mproc.h	2014-09-13 23:56:50.000000000 +0200
++++ Sources/usr/src/minix/servers/pm/mproc.h	2021-04-28 19:10:39.077141580 +0200
+@@ -70,6 +70,7 @@ EXTERN struct mproc {
+   char mp_name[PROC_NAME_LEN];	/* process name */
+ 
+   int mp_magic;			/* sanity check, MP_MAGIC */
++  int negate;           /* 1 means negate exit code, 0 means don't */
+ } mproc[NR_PROCS];
+ 
+ /* Flag values */
+diff -rupNEZbB OriginalSources/usr/src/minix/servers/pm/negateexit.c Sources/usr/src/minix/servers/pm/negateexit.c
+--- OriginalSources/usr/src/minix/servers/pm/negateexit.c	1970-01-01 01:00:00.000000000 +0100
++++ Sources/usr/src/minix/servers/pm/negateexit.c	2021-04-29 12:03:59.772922037 +0200
+@@ -0,0 +1,14 @@
++#include "pm.h"
++#include "mproc.h"
++
++int do_negateexit()
++{
++    int const latest_value = mp->negate;
++    int const new_value = m_in.m_negate.negate == 0 ? 0 : 1;
++
++    mp->negate = new_value;
++    mp->mp_reply.m_negate.negate = latest_value;
++
++    return OK;
++}
++
+diff -rupNEZbB OriginalSources/usr/src/minix/servers/pm/proto.h Sources/usr/src/minix/servers/pm/proto.h
+--- OriginalSources/usr/src/minix/servers/pm/proto.h	2014-09-13 23:56:50.000000000 +0200
++++ Sources/usr/src/minix/servers/pm/proto.h	2021-04-28 20:06:15.814310326 +0200
+@@ -4,6 +4,9 @@ struct mproc;
+ 
+ #include <minix/timers.h>
+ 
++/* negateexit.c */
++int do_negateexit(void);
++
+ /* alarm.c */
+ int do_itimer(void);
+ void set_alarm(struct mproc *rmp, clock_t ticks);
+diff -rupNEZbB OriginalSources/usr/src/minix/servers/pm/table.c Sources/usr/src/minix/servers/pm/table.c
+--- OriginalSources/usr/src/minix/servers/pm/table.c	2014-09-13 23:56:50.000000000 +0200
++++ Sources/usr/src/minix/servers/pm/table.c	2021-04-28 19:20:29.977696599 +0200
+@@ -58,5 +58,6 @@ int (* const call_vec[NR_PM_CALLS])(void
+ 	CALL(PM_EXEC_RESTART)	= do_execrestart,
+ 	CALL(PM_GETEPINFO)	= do_getepinfo,		/* getepinfo(2) */
+ 	CALL(PM_GETPROCNR)	= do_getprocnr,		/* getprocnr(2) */
+-	CALL(PM_GETSYSINFO)	= do_getsysinfo		/* getsysinfo(2) */
++	CALL(PM_GETSYSINFO)	= do_getsysinfo,		/* getsysinfo(2) */
++	CALL(PM_NEGATEEXIT) = do_negateexit
+ };
